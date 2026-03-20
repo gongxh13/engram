@@ -1,7 +1,6 @@
 import type { Plugin, PluginInput } from '@opencode-ai/plugin';
-import type { Event, Session, FileDiff } from '@opencode-ai/sdk';
+import type { SessionStatus } from '@opencode-ai/sdk';
 import { SessionTracker } from './session-tracker.js';
-import { appendSession } from '@engram/core';
 
 export const EngramPlugin: Plugin = async (input: PluginInput) => {
   const tracker = new SessionTracker(input.client);
@@ -17,12 +16,9 @@ export const EngramPlugin: Plugin = async (input: PluginInput) => {
           tracker.onSessionUpdated(event.properties.info);
           break;
 
-        case 'session.idle':
-          await tracker.finalizeSession(event.properties.sessionID);
-          break;
-
-        case 'session.deleted':
-          await tracker.finalizeSession(event.properties.info.id);
+        case 'session.status':
+          const status = event.properties.status as SessionStatus;
+          tracker.onSessionStatus(event.properties.sessionID, status.type);
           break;
 
         case 'session.diff':

@@ -1,17 +1,59 @@
 import type { createOpencodeClient } from '@opencode-ai/sdk';
-import type { Session, Message, Part, FileDiff } from '@opencode-ai/sdk';
-import { appendSession } from '@engram/core';
-import type { EvalSession } from '@engram/core';
+import type { Session, FileDiff } from '@opencode-ai/sdk';
+
+interface EvalSession {
+  session_id: string;
+  created_at: string;
+  ended_at?: string;
+  platform: string;
+  model: string;
+  domain?: string;
+  initial_prompt: string | null;
+  initial_context?: {
+    context_type: string;
+    git_branch?: string;
+    git_commit?: string;
+    cwd?: string;
+  };
+  messages: { id: string; role: string; createdAt?: string }[];
+  final_diff?: { path: string; originalContent?: string; modifiedContent?: string; status: string }[];
+  outcome: string;
+  signals: {
+    turn_count: number;
+    user_edits: number;
+    time_to_accept?: number;
+  };
+}
 
 interface SessionState {
   session: Session;
-  messages: Message[];
   finalDiff?: FileDiff[];
   startedAt: string;
   error?: string;
 }
 
 type OpenCodeClient = ReturnType<typeof createOpencodeClient>;
+
+const DEFAULT_DATA_DIR = `${process.env.HOME}/.engram`;
+
+function ensureDirectory(path: string): void {
+  const fs = require('fs');
+  const dirname = require('path').dirname;
+  const dir = dirname(path);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+}
+
+function appendSession(session: EvalSession): void {
+  const fs = require('fs');
+  const path = require('path');
+  const filePath = path.join(DEFAULT_DATA_DIR, 'sessions.jsonl');
+  ensureDirectory(filePath);
+  const line = JSON.stringify(session) + '\n';
+  fs.appendFileSync(filePath, line, 'utf-8');
+  console.log('[engram] Session saved to:', filePath);
+}
 
 export class SessionTracker {
   private sessions = new Map<string, SessionState>();
@@ -22,9 +64,9 @@ export class SessionTracker {
   }
 
   onSessionCreated(session: Session) {
+    console.log('[engram] Session created:', session.id);
     this.sessions.set(session.id, {
       session,
-      messages: [],
       startedAt: new Date().toISOString(),
     });
   }
@@ -36,9 +78,15 @@ export class SessionTracker {
     } else {
       this.sessions.set(session.id, {
         session,
-        messages: [],
         startedAt: new Date().toISOString(),
       });
+    }
+  }
+
+  onSessionStatus(sessionID: string, status: string) {
+    const state = this.sessions.get(sessionID);
+    if (state && status === 'idle') {
+      this.finalizeSession(sessionID);
     }
   }
 
@@ -56,102 +104,41 @@ export class SessionTracker {
     }
   }
 
-  async finalizeSession(sessionID: string) {
+  private finalizeSession(sessionID: string) {
     const state = this.sessions.get(sessionID);
     if (!state) return;
 
-    try {
-      // Get final messages
-      const messagesResp = await this.client.session.messages({ 
-        path: { id: sessionID } 
-      });
-      
-      if (messagesResp.data) {
-        state.messages = messagesResp.data.map(m => m.info);
-      }
+    const outcome = state.error ? 'abandoned' : 
+      (!state.finalDiff || state.finalDiff.length === 0) ? 'rejected' : 'accepted';
 
-      // Get final diff
-      if (!state.finalDiff) {
-        const diffResp = await this.client.session.diff({ 
-          path: { id: sessionID } 
-        });
-        state.finalDiff = diffResp.data;
-      }
-
-      const evalSession = this.convertToEvalSession(state, sessionID);
-      appendSession(evalSession);
-      this.sessions.delete(sessionID);
-    } catch (err) {
-      console.error('Failed to finalize session:', err);
-    }
-  }
-
-  private convertToEvalSession(state: SessionState, sessionID: string): EvalSession {
-    const endTime = state.session.time?.updated 
-      ? new Date(state.session.time.updated).toISOString()
-      : new Date().toISOString();
-    const startTime = state.startedAt;
-
-    const outcome = this.determineOutcome(state);
-
-    // Get initial prompt from first user message
-    const firstUserMsg = state.messages.find(m => m.role === 'user');
-    const initialPrompt = firstUserMsg ? this.extractPromptFromMessage(firstUserMsg) : null;
-
-    return {
+    const evalSession: EvalSession = {
       session_id: sessionID,
-      created_at: startTime,
-      ended_at: endTime,
+      created_at: state.startedAt,
+      ended_at: new Date().toISOString(),
       platform: 'opencode',
       model: 'unknown',
       domain: 'coding',
-      initial_prompt: initialPrompt,
+      initial_prompt: null,
       initial_context: {
         context_type: 'files',
         cwd: state.session.directory,
       },
-      messages: state.messages.map(msg => this.convertMessage(msg)),
-      final_diff: state.finalDiff?.map(diff => this.convertFileDiff(diff)),
+      messages: [],
+      final_diff: state.finalDiff?.map(diff => ({
+        path: diff.file,
+        originalContent: diff.before,
+        modifiedContent: diff.after,
+        status: 'modified',
+      })),
       outcome,
       signals: {
-        turn_count: state.messages.filter(m => m.role === 'assistant').length,
+        turn_count: 0,
         user_edits: state.finalDiff?.length || 0,
       },
     };
-  }
 
-  private extractPromptFromMessage(message: Message): string {
-    const msg = message as any;
-    if (msg.parts && Array.isArray(msg.parts)) {
-      const textPart = msg.parts.find((p: Part) => p.type === 'text');
-      if (textPart && 'text' in textPart) {
-        return textPart.text || '';
-      }
-    }
-    return '';
-  }
-
-  private determineOutcome(state: SessionState): 'accepted' | 'modified' | 'rejected' | 'abandoned' {
-    if (state.error) return 'abandoned';
-    if (!state.finalDiff || state.finalDiff.length === 0) return 'rejected';
-    return 'accepted';
-  }
-
-  private convertMessage(message: Message) {
-    const msg = message as any;
-    return {
-      id: message.id,
-      role: message.role,
-      createdAt: msg.time?.created ? String(msg.time.created) : undefined,
-    };
-  }
-
-  private convertFileDiff(diff: FileDiff) {
-    return {
-      path: diff.file,
-      originalContent: diff.before,
-      modifiedContent: diff.after,
-      status: 'modified' as const,
-    };
+    appendSession(evalSession);
+    console.log('[engram] Session saved:', sessionID, 'outcome:', outcome);
+    this.sessions.delete(sessionID);
   }
 }

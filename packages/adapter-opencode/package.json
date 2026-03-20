@@ -10,7 +10,6 @@
     "dev": "tsc --watch"
   },
   "dependencies": {
-    "@engram/core": "workspace:*",
     "@opencode-ai/plugin": "^1.2.27",
     "@opencode-ai/sdk": "^1.2.27"
   },
