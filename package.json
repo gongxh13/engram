@@ -9,6 +9,7 @@
     "clean": "pnpm -r run clean || true"
   },
   "devDependencies": {
+    "@types/node": "^25.5.0",
     "typescript": "^5.3.0"
   }
 }

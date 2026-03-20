@@ -11,8 +11,8 @@
   },
   "dependencies": {
     "@engram/core": "workspace:*",
-    "@opencode-ai/plugin": "^0.1.0",
-    "@opencode-ai/sdk": "^0.1.0"
+    "@opencode-ai/plugin": "^1.2.27",
+    "@opencode-ai/sdk": "^1.2.27"
   },
   "devDependencies": {
     "typescript": "^5.3.0"

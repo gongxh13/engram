@@ -1,46 +1,38 @@
-import type { Plugin } from '@opencode-ai/plugin';
+import type { Plugin, PluginInput } from '@opencode-ai/plugin';
+import type { Event, Session, FileDiff } from '@opencode-ai/sdk';
 import { SessionTracker } from './session-tracker.js';
-import { appendSession, type EvalSession } from '@engram/core';
+import { appendSession } from '@engram/core';
 
-export const EngramPlugin: Plugin = async (ctx) => {
-  const tracker = new SessionTracker(ctx.client);
+export const EngramPlugin: Plugin = async (input: PluginInput) => {
+  const tracker = new SessionTracker(input.client);
 
   return {
-    'session.created': async (input) => {
-      const session = await ctx.client.session.get({ path: { id: input.sessionID } });
-      tracker.onSessionCreated(input.sessionID, session.data);
-    },
+    event: async ({ event }) => {
+      switch (event.type) {
+        case 'session.created':
+          tracker.onSessionCreated(event.properties.info);
+          break;
 
-    'session.updated': async (input) => {
-      tracker.onSessionUpdated(input.sessionID, input.properties);
-    },
+        case 'session.updated':
+          tracker.onSessionUpdated(event.properties.info);
+          break;
 
-    'message.updated': async (input) => {
-      if (input.properties?.status === 'done') {
-        await tracker.onMessageDone(input.sessionID, input.messageID);
+        case 'session.idle':
+          await tracker.finalizeSession(event.properties.sessionID);
+          break;
+
+        case 'session.deleted':
+          await tracker.finalizeSession(event.properties.info.id);
+          break;
+
+        case 'session.diff':
+          tracker.onSessionDiff(event.properties.sessionID, event.properties.diff);
+          break;
+
+        case 'session.error':
+          tracker.onSessionError(event.properties.sessionID || '', event.properties.error);
+          break;
       }
-    },
-
-    'session.diff': async (input) => {
-      tracker.onSessionDiff(input.sessionID, input.diff);
-    },
-
-    'session.idle': async (input) => {
-      const sessionData = await tracker.finalizeSession(input.sessionID);
-      if (sessionData) {
-        appendSession(sessionData);
-      }
-    },
-
-    'session.deleted': async (input) => {
-      const sessionData = await tracker.finalizeSession(input.sessionID);
-      if (sessionData) {
-        appendSession(sessionData);
-      }
-    },
-
-    'session.error': async (input) => {
-      tracker.onSessionError(input.sessionID, input.error);
     },
   };
 };

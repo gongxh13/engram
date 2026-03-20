@@ -1,14 +1,14 @@
 import type { createOpencodeClient } from '@opencode-ai/sdk';
 import type { Session, Message, Part, FileDiff } from '@opencode-ai/sdk';
+import { appendSession } from '@engram/core';
+import type { EvalSession } from '@engram/core';
 
 interface SessionState {
   session: Session;
   messages: Message[];
   finalDiff?: FileDiff[];
-  initialPrompt?: string;
-  model?: string;
-  error?: string;
   startedAt: string;
+  error?: string;
 }
 
 type OpenCodeClient = ReturnType<typeof createOpencodeClient>;
@@ -21,54 +21,24 @@ export class SessionTracker {
     this.client = client;
   }
 
-  async onSessionCreated(sessionID: string, session: Session) {
-    const vcsInfo = await this.client.vcs.info().catch(() => null);
-    
-    this.sessions.set(sessionID, {
+  onSessionCreated(session: Session) {
+    this.sessions.set(session.id, {
       session,
       messages: [],
       startedAt: new Date().toISOString(),
     });
-
-    // Get initial messages
-    const messagesResp = await this.client.session.messages({ 
-      path: { id: sessionID } 
-    });
-    
-    const state = this.sessions.get(sessionID);
-    if (state && messagesResp.data) {
-      state.messages = messagesResp.data.map(m => m.info);
-      state.initialPrompt = messagesResp.data[0]?.parts?.[0]?.text;
-      state.model = session.model;
-    }
   }
 
-  async onSessionUpdated(sessionID: string, properties: Record<string, unknown>) {
-    const state = this.sessions.get(sessionID);
-    if (state && properties.title) {
-      state.session.title = properties.title as string;
-    }
-  }
-
-  async onMessageDone(sessionID: string, messageID: string) {
-    const state = this.sessions.get(sessionID);
-    if (!state) return;
-
-    try {
-      const msgResp = await this.client.session.message({ 
-        path: { id: sessionID, messageID } 
+  onSessionUpdated(session: Session) {
+    const state = this.sessions.get(session.id);
+    if (state) {
+      state.session = session;
+    } else {
+      this.sessions.set(session.id, {
+        session,
+        messages: [],
+        startedAt: new Date().toISOString(),
       });
-      
-      if (msgResp.data) {
-        const existingIndex = state.messages.findIndex(m => m.id === messageID);
-        if (existingIndex >= 0) {
-          state.messages[existingIndex] = msgResp.data.info;
-        } else {
-          state.messages.push(msgResp.data.info);
-        }
-      }
-    } catch (error) {
-      console.error('Failed to fetch message:', error);
     }
   }
 
@@ -79,26 +49,18 @@ export class SessionTracker {
     }
   }
 
-  onSessionError(sessionID: string, error: string) {
+  onSessionError(sessionID: string, error: unknown) {
     const state = this.sessions.get(sessionID);
     if (state) {
-      state.error = error;
+      state.error = String(error);
     }
   }
 
   async finalizeSession(sessionID: string) {
     const state = this.sessions.get(sessionID);
-    if (!state) return null;
+    if (!state) return;
 
     try {
-      // Get final diff if not already captured
-      if (!state.finalDiff) {
-        const diffResp = await this.client.session.diff({ 
-          path: { id: sessionID } 
-        });
-        state.finalDiff = diffResp.data;
-      }
-
       // Get final messages
       const messagesResp = await this.client.session.messages({ 
         path: { id: sessionID } 
@@ -108,48 +70,65 @@ export class SessionTracker {
         state.messages = messagesResp.data.map(m => m.info);
       }
 
+      // Get final diff
+      if (!state.finalDiff) {
+        const diffResp = await this.client.session.diff({ 
+          path: { id: sessionID } 
+        });
+        state.finalDiff = diffResp.data;
+      }
+
       const evalSession = this.convertToEvalSession(state, sessionID);
+      appendSession(evalSession);
       this.sessions.delete(sessionID);
-      
-      return evalSession;
-    } catch (error) {
-      console.error('Failed to finalize session:', error);
-      return null;
+    } catch (err) {
+      console.error('Failed to finalize session:', err);
     }
   }
 
-  private convertToEvalSession(state: SessionState, sessionID: string) {
-    const endTime = state.session.updatedAt || new Date().toISOString();
+  private convertToEvalSession(state: SessionState, sessionID: string): EvalSession {
+    const endTime = state.session.time?.updated 
+      ? new Date(state.session.time.updated).toISOString()
+      : new Date().toISOString();
     const startTime = state.startedAt;
-    const timeToAccept = state.session.status === 'completed' 
-      ? (new Date(endTime).getTime() - new Date(startTime).getTime()) / 1000 
-      : undefined;
 
     const outcome = this.determineOutcome(state);
+
+    // Get initial prompt from first user message
+    const firstUserMsg = state.messages.find(m => m.role === 'user');
+    const initialPrompt = firstUserMsg ? this.extractPromptFromMessage(firstUserMsg) : null;
 
     return {
       session_id: sessionID,
       created_at: startTime,
       ended_at: endTime,
       platform: 'opencode',
-      model: state.model || 'unknown',
+      model: 'unknown',
       domain: 'coding',
-      initial_prompt: state.initialPrompt || null,
+      initial_prompt: initialPrompt,
       initial_context: {
         context_type: 'files',
-        git_branch: state.session.gitBranch,
-        git_commit: state.session.gitCommit,
         cwd: state.session.directory,
       },
       messages: state.messages.map(msg => this.convertMessage(msg)),
-      final_diff: state.finalDiff,
+      final_diff: state.finalDiff?.map(diff => this.convertFileDiff(diff)),
       outcome,
       signals: {
         turn_count: state.messages.filter(m => m.role === 'assistant').length,
         user_edits: state.finalDiff?.length || 0,
-        time_to_accept: timeToAccept,
       },
     };
+  }
+
+  private extractPromptFromMessage(message: Message): string {
+    const msg = message as any;
+    if (msg.parts && Array.isArray(msg.parts)) {
+      const textPart = msg.parts.find((p: Part) => p.type === 'text');
+      if (textPart && 'text' in textPart) {
+        return textPart.text || '';
+      }
+    }
+    return '';
   }
 
   private determineOutcome(state: SessionState): 'accepted' | 'modified' | 'rejected' | 'abandoned' {
@@ -159,11 +138,20 @@ export class SessionTracker {
   }
 
   private convertMessage(message: Message) {
+    const msg = message as any;
     return {
       id: message.id,
       role: message.role,
-      createdAt: message.createdAt,
-      status: message.status,
+      createdAt: msg.time?.created ? String(msg.time.created) : undefined,
+    };
+  }
+
+  private convertFileDiff(diff: FileDiff) {
+    return {
+      path: diff.file,
+      originalContent: diff.before,
+      modifiedContent: diff.after,
+      status: 'modified' as const,
     };
   }
 }
