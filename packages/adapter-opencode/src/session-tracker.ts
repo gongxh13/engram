@@ -30,6 +30,7 @@ interface SessionState {
   finalDiff?: FileDiff[];
   startedAt: string;
   error?: string;
+  saved?: boolean;
 }
 
 type OpenCodeClient = ReturnType<typeof createOpencodeClient>;
@@ -85,7 +86,7 @@ export class SessionTracker {
 
   onSessionStatus(sessionID: string, status: string) {
     const state = this.sessions.get(sessionID);
-    if (state && status === 'idle') {
+    if (state && status === 'idle' && !state.saved) {
       this.finalizeSession(sessionID);
     }
   }
@@ -138,6 +139,7 @@ export class SessionTracker {
     };
 
     appendSession(evalSession);
+    state.saved = true;
     console.log('[engram] Session saved:', sessionID, 'outcome:', outcome);
     this.sessions.delete(sessionID);
   }
