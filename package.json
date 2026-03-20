@@ -1,0 +1,14 @@
+{
+  "name": "engram",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Agent Task Evaluation Data Collection System",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "dev": "pnpm -r run dev",
+    "clean": "pnpm -r run clean || true"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0"
+  }
+}
