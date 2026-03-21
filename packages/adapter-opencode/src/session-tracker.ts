@@ -1,4 +1,4 @@
-import type { createOpencodeClient, Session, FileDiff, Message as OpenCodeMessage, AssistantMessage, TextPart } from '@opencode-ai/sdk';
+import type { createOpencodeClient, Session, FileDiff, Message as OpenCodeMessage, AssistantMessage, TextPart, ToolPart } from '@opencode-ai/sdk';
 
 import { appendFileSync, existsSync, mkdirSync } from 'fs';
 import { dirname, join } from 'path';
@@ -48,6 +48,12 @@ interface SessionMessage {
   content?: string;
   model?: { providerID: string; modelID: string };
   tokens?: { input: number; output: number; reasoning: number };
+  toolCalls?: Array<{
+    tool: string;
+    status: string;
+    input?: any;
+    output?: any;
+  }>;
 }
 
 interface SessionState {
@@ -57,7 +63,7 @@ interface SessionState {
   turnCount: number;
   model?: string;
   messages: SessionMessage[];
-  messageParts: Map<string, TextPart[]>;
+  messageParts: Map<string, (TextPart | ToolPart)[]>;
 }
 
 type OpenCodeClient = ReturnType<typeof createOpencodeClient>;
@@ -134,11 +140,9 @@ export class SessionTracker {
     }
   }
 
-  onMessagePartUpdated(part: TextPart) {
+  onMessagePartUpdated(part: TextPart | ToolPart) {
     const state = this.sessions.get(part.sessionID);
     if (!state) return;
-
-    if (part.type !== 'text') return;
 
     let parts = state.messageParts.get(part.messageID);
     if (!parts) {
@@ -153,10 +157,29 @@ export class SessionTracker {
       parts.push(part);
     }
 
-    const userMsg = state.messages.find(m => m.id === part.messageID && m.role === 'user');
-    if (userMsg) {
-      const allText = parts.map(p => p.text).join('');
-      userMsg.content = allText;
+    const msg = state.messages.find(m => m.id === part.messageID);
+    if (!msg) return;
+
+    if (part.type === 'text') {
+      const allText = parts.filter(p => p.type === 'text').map(p => (p as TextPart).text).join('');
+      msg.content = allText;
+    } else if (part.type === 'tool') {
+      const toolPart = part as ToolPart;
+      if (!msg.toolCalls) {
+        msg.toolCalls = [];
+      }
+      const existingToolIdx = msg.toolCalls.findIndex(t => t.tool === toolPart.tool);
+      const toolCall = {
+        tool: toolPart.tool,
+        status: (toolPart.state as any)?.status || 'unknown',
+        input: (toolPart.state as any)?.input,
+        output: (toolPart.state as any)?.output,
+      };
+      if (existingToolIdx >= 0) {
+        msg.toolCalls[existingToolIdx] = toolCall;
+      } else {
+        msg.toolCalls.push(toolCall);
+      }
     }
   }
 
