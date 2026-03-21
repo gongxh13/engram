@@ -35,6 +35,7 @@ interface EvalSession {
     modifiedContent?: string;
     status: string;
   }>;
+  is_sub_session?: boolean;
   signals: {
     turn_count: number;
   };
@@ -283,6 +284,7 @@ export class SessionTracker {
         modifiedContent: diff.after,
         status: 'modified',
       })),
+is_sub_session: !!state.session.parentID,
       signals: {
         turn_count: state.turnCount,
       },
