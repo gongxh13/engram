@@ -21,9 +21,6 @@ export const EngramPlugin: Plugin = async (input: PluginInput) => {
         case 'session.diff':
           tracker.onSessionDiff(event.properties.sessionID, event.properties.diff);
           break;
-        case 'session.error':
-          tracker.onSessionError(event.properties.sessionID || '', event.properties.error);
-          break;
         case 'message.updated': {
           const msg = event.properties.info as UserMessage | AssistantMessage;
           tracker.onMessageUpdated(msg);

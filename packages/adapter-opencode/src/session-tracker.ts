@@ -1,4 +1,4 @@
-import type { createOpencodeClient, Session, FileDiff, Message as OpenCodeMessage, UserMessage, AssistantMessage, TextPart } from '@opencode-ai/sdk';
+import type { createOpencodeClient, Session, FileDiff, Message as OpenCodeMessage, AssistantMessage, TextPart } from '@opencode-ai/sdk';
 
 import { appendFileSync, existsSync, mkdirSync } from 'fs';
 import { dirname, join } from 'path';
@@ -15,7 +15,12 @@ interface EvalSession {
     context_type: string;
     cwd?: string;
   };
-  messages: any[];
+  messages: Array<{
+    role: string;
+    content?: string;
+    model?: { providerID: string; modelID: string };
+    tokens?: { input: number; output: number; reasoning: number };
+  }>;
   final_diff?: Array<{
     path: string;
     originalContent?: string;
@@ -24,7 +29,6 @@ interface EvalSession {
   }>;
   signals: {
     turn_count: number;
-    user_edits: number;
   };
 }
 
@@ -38,15 +42,21 @@ function appendSession(session: EvalSession): void {
   appendFileSync(filePath, line, 'utf-8');
 }
 
+interface SessionMessage {
+  id: string;
+  role: string;
+  content?: string;
+  model?: { providerID: string; modelID: string };
+  tokens?: { input: number; output: number; reasoning: number };
+}
+
 interface SessionState {
   session: Session;
   finalDiff?: FileDiff[];
   startedAt: string;
-  error?: string;
-  saved?: boolean;
-  initialPrompt?: string;
+  turnCount: number;
   model?: string;
-  messages: OpenCodeMessage[];
+  messages: SessionMessage[];
   messageParts: Map<string, TextPart[]>;
 }
 
@@ -64,8 +74,8 @@ export class SessionTracker {
     const state: SessionState = {
       session,
       startedAt: new Date().toISOString(),
+      turnCount: 0,
       messages: [],
-      model: 'unknown',
       messageParts: new Map(),
     };
     this.sessions.set(session.id, state);
@@ -79,8 +89,8 @@ export class SessionTracker {
       this.sessions.set(session.id, {
         session,
         startedAt: new Date().toISOString(),
+        turnCount: 0,
         messages: [],
-        model: 'unknown',
         messageParts: new Map(),
       });
     }
@@ -90,19 +100,35 @@ export class SessionTracker {
     const state = this.sessions.get(message.sessionID);
     if (!state) return;
 
-    state.messages.push(message);
-
-    if (message.role === 'user' && !state.initialPrompt) {
-      const parts = state.messageParts.get(message.id);
-      const textPart = parts?.find((p) => p.type === 'text');
-      if (textPart) {
-        state.initialPrompt = textPart.text;
-      }
+    const existingMsgIdx = state.messages.findIndex(m => m.id === message.id);
+    if (existingMsgIdx >= 0) {
+      return;
     }
 
-    if (message.role === 'assistant' && state.model === 'unknown') {
+    if (message.role === 'user') {
+      state.turnCount += 1;
+      
+      const parts = state.messageParts.get(message.id);
+      const textPart = parts?.find((p) => p.type === 'text');
+      
+      state.messages.push({
+        id: message.id,
+        role: 'user',
+        content: textPart?.text || '',
+      });
+    }
+
+    if (message.role === 'assistant') {
       const assistantMsg = message as AssistantMessage;
-      if (assistantMsg.providerID && assistantMsg.modelID) {
+      
+      state.messages.push({
+        id: message.id,
+        role: 'assistant',
+        model: { providerID: assistantMsg.providerID, modelID: assistantMsg.modelID },
+        tokens: assistantMsg.tokens,
+      });
+      
+      if (assistantMsg.providerID && assistantMsg.modelID && !state.model) {
         state.model = `${assistantMsg.providerID}@${assistantMsg.modelID}`;
       }
     }
@@ -111,6 +137,8 @@ export class SessionTracker {
   onMessagePartUpdated(part: TextPart) {
     const state = this.sessions.get(part.sessionID);
     if (!state) return;
+
+    if (part.type !== 'text') return;
 
     let parts = state.messageParts.get(part.messageID);
     if (!parts) {
@@ -124,11 +152,17 @@ export class SessionTracker {
     } else {
       parts.push(part);
     }
+
+    const userMsg = state.messages.find(m => m.id === part.messageID && m.role === 'user');
+    if (userMsg) {
+      const allText = parts.map(p => p.text).join('');
+      userMsg.content = allText;
+    }
   }
 
   onSessionStatus(sessionID: string, status: string) {
     const state = this.sessions.get(sessionID);
-    if (state && status === 'idle' && !state.saved) {
+    if (state && status === 'idle') {
       this.finalizeSession(sessionID);
     }
   }
@@ -140,18 +174,15 @@ export class SessionTracker {
     }
   }
 
-  onSessionError(sessionID: string, error: unknown) {
-    const state = this.sessions.get(sessionID);
-    if (state) {
-      state.error = String(error);
-    }
-  }
-
   private finalizeSession(sessionID: string) {
     const state = this.sessions.get(sessionID);
     if (!state) return;
 
-    const turnCount = Math.floor(state.messages.length / 2);
+    const firstUserMsg = state.messages.find(m => m.role === 'user');
+    let initialPrompt = firstUserMsg?.content || null;
+    if (initialPrompt) {
+      initialPrompt = initialPrompt.replace(/^["']|["']/g, '').trim();
+    }
 
     const evalSession: EvalSession = {
       session_id: sessionID,
@@ -159,12 +190,12 @@ export class SessionTracker {
       updated_at: new Date(state.session.time.updated).toISOString(),
       platform: 'opencode',
       model: state.model || 'unknown',
-      initial_prompt: state.initialPrompt || null,
+      initial_prompt: initialPrompt,
       initial_context: {
         context_type: 'files',
         cwd: state.session.directory,
       },
-      messages: [],
+      messages: state.messages,
       final_diff: state.finalDiff?.map((diff) => ({
         path: diff.file,
         originalContent: diff.before,
@@ -172,13 +203,11 @@ export class SessionTracker {
         status: 'modified',
       })),
       signals: {
-        turn_count: turnCount,
-        user_edits: 0,
+        turn_count: state.turnCount,
       },
     };
 
     appendSession(evalSession);
-    state.saved = true;
     this.sessions.delete(sessionID);
   }
 }
