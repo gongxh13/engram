@@ -196,7 +196,6 @@ export class SessionTracker {
       if (!msg.toolCalls) {
         msg.toolCalls = [];
       }
-      const existingToolIdx = msg.toolCalls.findIndex(t => t.tool === toolPart.tool);
       const toolState = toolPart.state as any;
       const toolCall: any = {
         tool: toolPart.tool,
@@ -213,11 +212,7 @@ export class SessionTracker {
           toolCall.sub_session_id = match[1];
         }
       }
-      if (existingToolIdx >= 0) {
-        msg.toolCalls[existingToolIdx] = toolCall;
-      } else {
-        msg.toolCalls.push(toolCall);
-      }
+      msg.toolCalls.push(toolCall);
     } else if (part.type === 'agent') {
       const agentPart = part as AgentPart;
       if (!msg.subAgents) {
