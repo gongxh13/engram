@@ -1,4 +1,4 @@
-import type { createOpencodeClient, Session, FileDiff, Message as OpenCodeMessage, AssistantMessage, TextPart, ToolPart } from '@opencode-ai/sdk';
+import type { createOpencodeClient, Session, FileDiff, Message as OpenCodeMessage, AssistantMessage, TextPart, ToolPart, AgentPart } from '@opencode-ai/sdk';
 
 import { appendFileSync, existsSync, mkdirSync } from 'fs';
 import { dirname, join } from 'path';
@@ -54,6 +54,10 @@ interface SessionMessage {
     input?: any;
     output?: any;
   }>;
+  subAgents?: Array<{
+    name: string;
+    source?: string;
+  }>;
 }
 
 interface SessionState {
@@ -63,7 +67,7 @@ interface SessionState {
   turnCount: number;
   model?: string;
   messages: SessionMessage[];
-  messageParts: Map<string, (TextPart | ToolPart)[]>;
+  messageParts: Map<string, (TextPart | ToolPart | AgentPart)[]>;
 }
 
 type OpenCodeClient = ReturnType<typeof createOpencodeClient>;
@@ -143,7 +147,7 @@ export class SessionTracker {
     }
   }
 
-  onMessagePartUpdated(part: TextPart | ToolPart) {
+  onMessagePartUpdated(part: TextPart | ToolPart | AgentPart) {
     const state = this.sessions.get(part.sessionID);
     if (!state) return;
 
@@ -182,6 +186,21 @@ export class SessionTracker {
         msg.toolCalls[existingToolIdx] = toolCall;
       } else {
         msg.toolCalls.push(toolCall);
+      }
+    } else if (part.type === 'agent') {
+      const agentPart = part as AgentPart;
+      if (!msg.subAgents) {
+        msg.subAgents = [];
+      }
+      const subAgent = {
+        name: agentPart.name,
+        source: agentPart.source?.value,
+      };
+      const existingIdx = msg.subAgents.findIndex(a => a.name === agentPart.name);
+      if (existingIdx >= 0) {
+        msg.subAgents[existingIdx] = subAgent;
+      } else {
+        msg.subAgents.push(subAgent);
       }
     }
   }
