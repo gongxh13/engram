@@ -195,6 +195,7 @@ export class SessionTracker {
       const toolState = toolPart.state as any;
       const status = toolState?.status || 'unknown';
       
+      
       const existingIdx = msg.toolCalls.findIndex((t: any) => 
         t.tool === toolPart.tool && 
         (t.status === 'pending' || t.status === 'running' || t.status === 'unknown') &&
@@ -221,7 +222,12 @@ export class SessionTracker {
       } else {
         const tc = msg.toolCalls[existingIdx] as any;
         tc.status = status;
-        tc.output = toolState?.output;
+        if (!tc.input || Object.keys(tc.input).length === 0) {
+          tc.input = toolState?.input;
+        }
+        if (toolState?.output) {
+          tc.output = toolState.output;
+        }
         if (status === 'error' && toolState?.error) {
           tc.error = toolState.error;
         }
