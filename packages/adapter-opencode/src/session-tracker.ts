@@ -107,32 +107,35 @@ export class SessionTracker {
     if (!state) return;
 
     const existingMsgIdx = state.messages.findIndex(m => m.id === message.id);
-    if (existingMsgIdx >= 0) {
-      return;
-    }
 
     if (message.role === 'user') {
-      state.turnCount += 1;
-      
-      const parts = state.messageParts.get(message.id);
-      const textPart = parts?.find((p) => p.type === 'text');
-      
-      state.messages.push({
-        id: message.id,
-        role: 'user',
-        content: textPart?.text || '',
-      });
+      if (existingMsgIdx < 0) {
+        state.turnCount += 1;
+        
+        const parts = state.messageParts.get(message.id);
+        const textPart = parts?.find((p) => p.type === 'text');
+        
+        state.messages.push({
+          id: message.id,
+          role: 'user',
+          content: textPart?.text || '',
+        });
+      }
     }
 
     if (message.role === 'assistant') {
       const assistantMsg = message as AssistantMessage;
       
-      state.messages.push({
-        id: message.id,
-        role: 'assistant',
-        model: { providerID: assistantMsg.providerID, modelID: assistantMsg.modelID },
-        tokens: assistantMsg.tokens,
-      });
+      if (existingMsgIdx >= 0) {
+        state.messages[existingMsgIdx].tokens = assistantMsg.tokens;
+      } else {
+        state.messages.push({
+          id: message.id,
+          role: 'assistant',
+          model: { providerID: assistantMsg.providerID, modelID: assistantMsg.modelID },
+          tokens: assistantMsg.tokens,
+        });
+      }
       
       if (assistantMsg.providerID && assistantMsg.modelID && !state.model) {
         state.model = `${assistantMsg.providerID}@${assistantMsg.modelID}`;
