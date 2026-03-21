@@ -58,12 +58,27 @@ function appendSession(session: EvalSession): void {
   writeFileSync(filePath, JSON.stringify(sessions, null, 2), 'utf-8');
 }
 
-function loadSubSessionMessages(subSessionID: string): any[] {
+function findExistingSession(sessionID: string): EvalSession | null {
+  const filePath = join(homedir(), '.engram', 'sessions.json');
+  if (!existsSync(filePath)) {
+    return null;
+  }
+  
+  try {
+    const content = readFileSync(filePath, 'utf-8');
+    const sessions: EvalSession[] = JSON.parse(content);
+    return sessions.find(s => s.session_id === sessionID) || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function loadSubSessionMessages(subSessionID: string): { messages: any[]; turn_count: number } {
   const messages: any[] = [];
   const msgDir = join(homedir(), '.local/share/opencode/storage/message', subSessionID);
   
   if (!existsSync(msgDir)) {
-    return messages;
+    return { messages: [], turn_count: 0 };
   }
 
   try {
@@ -121,7 +136,8 @@ function loadSubSessionMessages(subSessionID: string): any[] {
     }
   } catch (e) {}
 
-  return messages;
+  const turnCount = messages.filter(m => m.role === 'user').length;
+  return { messages, turn_count: turnCount };
 }
 
 interface SessionMessage {
@@ -311,20 +327,34 @@ export class SessionTracker {
       initialPrompt = initialPrompt.replace(/^["']|["']/g, '').trim();
     }
 
-    const subSessions: Array<{ id: string; messages: any[] }> = [];
+    const subSessions: Array<{ id: string; messages: any[]; turn_count: number }> = [];
+    const addedSubSessionIDs = new Set<string>();
+    
     for (const msg of state.messages) {
       if (msg.toolCalls) {
         for (const tc of msg.toolCalls) {
           if (tc.tool === 'task' && tc.output) {
             const match = tc.output.match(/task_id:\s*(ses_[a-zA-Z0-9]+)/);
-            if (match) {
+            if (match && !addedSubSessionIDs.has(match[1])) {
               const subSessionID = match[1];
-              const subMessages = loadSubSessionMessages(subSessionID);
+              const { messages: subMessages, turn_count } = loadSubSessionMessages(subSessionID);
               if (subMessages.length > 0) {
                 subSessions.push({
                   id: subSessionID,
                   messages: subMessages,
+                  turn_count,
                 });
+                addedSubSessionIDs.add(subSessionID);
+              } else {
+                const existingSession = findExistingSession(subSessionID);
+                if (existingSession) {
+                  subSessions.push({
+                    id: subSessionID,
+                    messages: existingSession.messages,
+                    turn_count: existingSession.signals?.turn_count || 0,
+                  });
+                  addedSubSessionIDs.add(subSessionID);
+                }
               }
             }
           }
