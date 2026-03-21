@@ -1,4 +1,4 @@
-import type { createOpencodeClient, Session, FileDiff, Message as OpenCodeMessage, AssistantMessage, TextPart, ToolPart, AgentPart } from '@opencode-ai/sdk';
+import type { createOpencodeClient, Session, FileDiff, Message as OpenCodeMessage, AssistantMessage, TextPart, ToolPart } from '@opencode-ai/sdk';
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
@@ -75,11 +75,7 @@ interface SessionMessage {
     input?: any;
     output?: any;
   }>;
-  subAgents?: Array<{
-    name: string;
-    source?: string;
-  }>;
-}
+  }
 
 interface SessionState {
   session: Session;
@@ -88,7 +84,7 @@ interface SessionState {
   turnCount: number;
   model?: string;
   messages: SessionMessage[];
-  messageParts: Map<string, (TextPart | ToolPart | AgentPart)[]>;
+  messageParts: Map<string, (TextPart | ToolPart)[]>;
 }
 
 type OpenCodeClient = ReturnType<typeof createOpencodeClient>;
@@ -168,7 +164,7 @@ export class SessionTracker {
     }
   }
 
-  onMessagePartUpdated(part: TextPart | ToolPart | AgentPart) {
+  onMessagePartUpdated(part: TextPart | ToolPart) {
     const state = this.sessions.get(part.sessionID);
     if (!state) return;
 
@@ -236,10 +232,6 @@ export class SessionTracker {
           }
         }
       }
-    }
-    
-    if (part.type === 'agent') {
-      console.log('agent part:', JSON.stringify(part));
     }
   }
 
