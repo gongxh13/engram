@@ -103,7 +103,7 @@ export class SessionTracker {
     if (message.role === 'assistant' && state.model === 'unknown') {
       const assistantMsg = message as AssistantMessage;
       if (assistantMsg.providerID && assistantMsg.modelID) {
-        state.model = `${assistantMsg.providerID}/${assistantMsg.modelID}`;
+        state.model = `${assistantMsg.providerID}@${assistantMsg.modelID}`;
       }
     }
   }

@@ -9,8 +9,7 @@
     "prebuild": "pnpm -r --filter @engram/core build",
     "build": "tsc",
     "dev": "tsc --watch",
-    "link": "npm run build && node -e \"const fs=require('fs');const p=require('path');const h=require('os').homedir();const d=p.join(h,'.config','opencode','plugins');if(!fs.existsSync(d))fs.mkdirSync(d,{recursive:true});['plugin.js','session-tracker.js'].forEach(f=>{const t=p.join(d,f);if(fs.existsSync(t))fs.unlinkSync(t);fs.symlinkSync(p.join(__dirname,'dist',f),t);});console.log('Linked to',d);\"",
-    "unlink": "node -e \"const fs=require('fs');const p=require('path');const h=require('os').homedir();const d=p.join(h,'.config','opencode','plugins');['plugin.js','session-tracker.js'].forEach(f=>{const t=p.join(d,f);if(fs.existsSync(t))fs.unlinkSync(t);});console.log('Unlinked from',d);\""
+    "link": "npm run build && node -e \"const fs=require('fs');const p=require('path');const h=require('os').homedir();const c=p.join(h,'.cache/opencode/package.json');const pkg=JSON.parse(fs.readFileSync(c,'utf-8'));pkg.dependencies['@engram/adapter-opencode']='file:'+__dirname;pkg.dependencies['@engram/core']='file:'+p.join(__dirname,'../core');fs.writeFileSync(c,JSON.stringify(pkg,null,2));\""
   },
   "dependencies": {
     "@engram/core": "workspace:*",
