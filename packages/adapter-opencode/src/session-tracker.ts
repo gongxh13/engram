@@ -1,6 +1,6 @@
 import type { createOpencodeClient, Session, FileDiff, Message as OpenCodeMessage, AssistantMessage, TextPart, ToolPart, AgentPart } from '@opencode-ai/sdk';
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { homedir } from 'os';
 
@@ -20,6 +20,11 @@ interface EvalSession {
     content?: string;
     model?: { providerID: string; modelID: string };
     tokens?: { input: number; output: number; reasoning: number };
+    toolCalls?: any[];
+  }>;
+  sub_sessions?: Array<{
+    id: string;
+    messages: any[];
   }>;
   final_diff?: Array<{
     path: string;
@@ -51,6 +56,72 @@ function appendSession(session: EvalSession): void {
   
   sessions.push(session);
   writeFileSync(filePath, JSON.stringify(sessions, null, 2), 'utf-8');
+}
+
+function loadSubSessionMessages(subSessionID: string): any[] {
+  const messages: any[] = [];
+  const msgDir = join(homedir(), '.local/share/opencode/storage/message', subSessionID);
+  
+  if (!existsSync(msgDir)) {
+    return messages;
+  }
+
+  try {
+    const files = readdirSync(msgDir).filter(f => f.endsWith('.json'));
+    
+    for (const file of files) {
+      try {
+        const content = readFileSync(join(msgDir, file), 'utf-8');
+        const msg = JSON.parse(content);
+        
+        const msgData: any = {
+          id: msg.id,
+          role: msg.role,
+        };
+        
+        if (msg.role === 'user') {
+          msgData.content = msg.summary?.body || msg.summary?.title || '';
+        } else if (msg.role === 'assistant') {
+          msgData.model = msg.model;
+          msgData.tokens = msg.tokens;
+          
+          const partsDir = join(homedir(), '.local/share/opencode/storage/part', subSessionID, msg.id);
+          if (existsSync(partsDir)) {
+            const partFiles = readdirSync(partsDir).filter(f => f.endsWith('.json'));
+            let textContent = '';
+            const toolCalls: any[] = [];
+            
+            for (const pf of partFiles) {
+              try {
+                const pcontent = readFileSync(join(partsDir, pf), 'utf-8');
+                const part = JSON.parse(pcontent);
+                
+                if (part.type === 'text') {
+                  textContent += part.text;
+                } else if (part.type === 'tool') {
+                  toolCalls.push({
+                    tool: part.tool,
+                    status: part.state?.status || 'unknown',
+                    input: part.state?.input,
+                    output: part.state?.output,
+                  });
+                }
+              } catch (e) {}
+            }
+            
+            msgData.content = textContent;
+            if (toolCalls.length > 0) {
+              msgData.toolCalls = toolCalls;
+            }
+          }
+        }
+        
+        messages.push(msgData);
+      } catch (e) {}
+    }
+  } catch (e) {}
+
+  return messages;
 }
 
 interface SessionMessage {
@@ -240,6 +311,27 @@ export class SessionTracker {
       initialPrompt = initialPrompt.replace(/^["']|["']/g, '').trim();
     }
 
+    const subSessions: Array<{ id: string; messages: any[] }> = [];
+    for (const msg of state.messages) {
+      if (msg.toolCalls) {
+        for (const tc of msg.toolCalls) {
+          if (tc.tool === 'task' && tc.output) {
+            const match = tc.output.match(/task_id:\s*(ses_[a-zA-Z0-9]+)/);
+            if (match) {
+              const subSessionID = match[1];
+              const subMessages = loadSubSessionMessages(subSessionID);
+              if (subMessages.length > 0) {
+                subSessions.push({
+                  id: subSessionID,
+                  messages: subMessages,
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+
     const evalSession: EvalSession = {
       session_id: sessionID,
       created_at: state.startedAt,
@@ -252,6 +344,7 @@ export class SessionTracker {
         cwd: state.session.directory,
       },
       messages: state.messages,
+      sub_sessions: subSessions.length > 0 ? subSessions : undefined,
       final_diff: state.finalDiff?.map((diff) => ({
         path: diff.file,
         originalContent: diff.before,
