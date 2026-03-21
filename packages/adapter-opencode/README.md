@@ -1,17 +1,10 @@
 # @engram/adapter-opencode
 
-OpenCode platform adapter for engram.
+OpenCode 平台适配器，用于采集 OpenCode 会话数据。
 
-## Installation
+## 安装
 
-```bash
-pnpm install
-pnpm build
-```
-
-## Usage
-
-Add to your `opencode.json`:
+在 `opencode.json` 中添加配置：
 
 ```json
 {
@@ -19,23 +12,29 @@ Add to your `opencode.json`:
 }
 ```
 
-Or use as a local plugin by placing the built file in `~/.config/opencode/plugins/`.
+OpenCode 启动时会自动安装插件。
 
-## Events Handled
+## 本地开发
 
-- `session.created` - Session creation
-- `session.updated` - Session updates
-- `message.updated` - Message updates
-- `session.diff` - File diff updates
-- `session.idle` - Session completion
-- `session.deleted` - Session deletion
-- `session.error` - Session errors
+为贡献者提供的本地开发指南：
 
-## Data Collected
+```bash
+cd packages/adapter-opencode
 
-- Session metadata (id, created_at, ended_at, model)
-- Initial prompt
-- Git context (branch, commit, cwd)
-- Messages (conversation history)
-- File diffs (all changes)
-- Signals (turn_count, user_edits, time_to_accept)
+# 首次设置：构建并创建符号链接
+npm run link
+
+# 开发模式：保持运行，自动重新构建代码
+npm run dev
+
+# 完成开发后：移除符号链接
+npm run unlink
+```
+
+测试方法：
+```bash
+opencode run "create test.txt with hello"
+cat ~/.engram/sessions.jsonl
+```
+
+数据将保存到 `~/.engram/sessions.jsonl`。

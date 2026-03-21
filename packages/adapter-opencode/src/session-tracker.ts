@@ -1,28 +1,41 @@
-import type { createOpencodeClient } from '@opencode-ai/sdk';
-import type { Session, FileDiff } from '@opencode-ai/sdk';
+import type { createOpencodeClient, Session, FileDiff, Message as OpenCodeMessage, UserMessage, AssistantMessage, TextPart } from '@opencode-ai/sdk';
+
+import { appendFileSync, existsSync, mkdirSync } from 'fs';
+import { dirname, join } from 'path';
+import { homedir } from 'os';
 
 interface EvalSession {
   session_id: string;
   created_at: string;
-  ended_at?: string;
+  updated_at: string;
   platform: string;
   model: string;
-  domain?: string;
   initial_prompt: string | null;
   initial_context?: {
     context_type: string;
-    git_branch?: string;
-    git_commit?: string;
     cwd?: string;
   };
-  messages: { id: string; role: string; createdAt?: string }[];
-  final_diff?: { path: string; originalContent?: string; modifiedContent?: string; status: string }[];
-  outcome: string;
+  messages: any[];
+  final_diff?: Array<{
+    path: string;
+    originalContent?: string;
+    modifiedContent?: string;
+    status: string;
+  }>;
   signals: {
     turn_count: number;
     user_edits: number;
-    time_to_accept?: number;
   };
+}
+
+function appendSession(session: EvalSession): void {
+  const filePath = join(homedir(), '.engram', 'sessions.jsonl');
+  const dir = dirname(filePath);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+  const line = JSON.stringify(session) + '\n';
+  appendFileSync(filePath, line, 'utf-8');
 }
 
 interface SessionState {
@@ -31,30 +44,13 @@ interface SessionState {
   startedAt: string;
   error?: string;
   saved?: boolean;
+  initialPrompt?: string;
+  model?: string;
+  messages: OpenCodeMessage[];
+  messageParts: Map<string, TextPart[]>;
 }
 
 type OpenCodeClient = ReturnType<typeof createOpencodeClient>;
-
-const DEFAULT_DATA_DIR = `${process.env.HOME}/.engram`;
-
-function ensureDirectory(path: string): void {
-  const fs = require('fs');
-  const dirname = require('path').dirname;
-  const dir = dirname(path);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-}
-
-function appendSession(session: EvalSession): void {
-  const fs = require('fs');
-  const path = require('path');
-  const filePath = path.join(DEFAULT_DATA_DIR, 'sessions.jsonl');
-  ensureDirectory(filePath);
-  const line = JSON.stringify(session) + '\n';
-  fs.appendFileSync(filePath, line, 'utf-8');
-  console.log('[engram] Session saved to:', filePath);
-}
 
 export class SessionTracker {
   private sessions = new Map<string, SessionState>();
@@ -65,11 +61,14 @@ export class SessionTracker {
   }
 
   onSessionCreated(session: Session) {
-    console.log('[engram] Session created:', session.id);
-    this.sessions.set(session.id, {
+    const state: SessionState = {
       session,
       startedAt: new Date().toISOString(),
-    });
+      messages: [],
+      model: 'unknown',
+      messageParts: new Map(),
+    };
+    this.sessions.set(session.id, state);
   }
 
   onSessionUpdated(session: Session) {
@@ -80,7 +79,50 @@ export class SessionTracker {
       this.sessions.set(session.id, {
         session,
         startedAt: new Date().toISOString(),
+        messages: [],
+        model: 'unknown',
+        messageParts: new Map(),
       });
+    }
+  }
+
+  onMessageUpdated(message: OpenCodeMessage) {
+    const state = this.sessions.get(message.sessionID);
+    if (!state) return;
+
+    state.messages.push(message);
+
+    if (message.role === 'user' && !state.initialPrompt) {
+      const parts = state.messageParts.get(message.id);
+      const textPart = parts?.find((p) => p.type === 'text');
+      if (textPart) {
+        state.initialPrompt = textPart.text;
+      }
+    }
+
+    if (message.role === 'assistant' && state.model === 'unknown') {
+      const assistantMsg = message as AssistantMessage;
+      if (assistantMsg.providerID && assistantMsg.modelID) {
+        state.model = `${assistantMsg.providerID}/${assistantMsg.modelID}`;
+      }
+    }
+  }
+
+  onMessagePartUpdated(part: TextPart) {
+    const state = this.sessions.get(part.sessionID);
+    if (!state) return;
+
+    let parts = state.messageParts.get(part.messageID);
+    if (!parts) {
+      parts = [];
+      state.messageParts.set(part.messageID, parts);
+    }
+    
+    const existingIdx = parts.findIndex((p) => p.id === part.id);
+    if (existingIdx >= 0) {
+      parts[existingIdx] = part;
+    } else {
+      parts.push(part);
     }
   }
 
@@ -109,38 +151,34 @@ export class SessionTracker {
     const state = this.sessions.get(sessionID);
     if (!state) return;
 
-    const outcome = state.error ? 'abandoned' : 
-      (!state.finalDiff || state.finalDiff.length === 0) ? 'rejected' : 'accepted';
+    const turnCount = Math.floor(state.messages.length / 2);
 
     const evalSession: EvalSession = {
       session_id: sessionID,
       created_at: state.startedAt,
-      ended_at: new Date().toISOString(),
+      updated_at: new Date(state.session.time.updated).toISOString(),
       platform: 'opencode',
-      model: 'unknown',
-      domain: 'coding',
-      initial_prompt: null,
+      model: state.model || 'unknown',
+      initial_prompt: state.initialPrompt || null,
       initial_context: {
         context_type: 'files',
         cwd: state.session.directory,
       },
       messages: [],
-      final_diff: state.finalDiff?.map(diff => ({
+      final_diff: state.finalDiff?.map((diff) => ({
         path: diff.file,
         originalContent: diff.before,
         modifiedContent: diff.after,
         status: 'modified',
       })),
-      outcome,
       signals: {
-        turn_count: 0,
-        user_edits: state.finalDiff?.length || 0,
+        turn_count: turnCount,
+        user_edits: 0,
       },
     };
 
     appendSession(evalSession);
     state.saved = true;
-    console.log('[engram] Session saved:', sessionID, 'outcome:', outcome);
     this.sessions.delete(sessionID);
   }
 }

@@ -41,6 +41,10 @@ engram export --format jsonl
 - [架构设计](./architecture.md)
 - [API 参考](./api.md)
 
+## 贡献指南
+
+参见 [CONTRIBUTING.md](../../CONTRIBUTING.md) 本地开发配置。
+
 ## License
 
 MIT

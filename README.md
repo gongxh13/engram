@@ -36,10 +36,14 @@ engram export --format jsonl
 
 ## Documentation
 
-- [Installation](./docs/en/installation.md)
-- [Usage](./docs/en/usage.md)
-- [Architecture](./docs/en/architecture.md)
-- [API Reference](./docs/en/api.md)
+- [Installation](./docs/installation.md)
+- [Usage](./docs/usage.md)
+- [Architecture](./docs/architecture.md)
+- [API Reference](./docs/api.md)
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for local development setup.
 
 ## License
 

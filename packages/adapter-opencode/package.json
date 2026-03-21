@@ -6,10 +6,14 @@
   "types": "dist/index.d.ts",
   "type": "module",
   "scripts": {
+    "prebuild": "pnpm -r --filter @engram/core build",
     "build": "tsc",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "link": "npm run build && node -e \"const fs=require('fs');const p=require('path');const h=require('os').homedir();const d=p.join(h,'.config','opencode','plugins');if(!fs.existsSync(d))fs.mkdirSync(d,{recursive:true});['plugin.js','session-tracker.js'].forEach(f=>{const t=p.join(d,f);if(fs.existsSync(t))fs.unlinkSync(t);fs.symlinkSync(p.join(__dirname,'dist',f),t);});console.log('Linked to',d);\"",
+    "unlink": "node -e \"const fs=require('fs');const p=require('path');const h=require('os').homedir();const d=p.join(h,'.config','opencode','plugins');['plugin.js','session-tracker.js'].forEach(f=>{const t=p.join(d,f);if(fs.existsSync(t))fs.unlinkSync(t);});console.log('Unlinked from',d);\""
   },
   "dependencies": {
+    "@engram/core": "workspace:*",
     "@opencode-ai/plugin": "^1.2.27",
     "@opencode-ai/sdk": "^1.2.27"
   },

@@ -1,7 +1,7 @@
 export interface EvalSession {
   session_id: string;
   created_at: string;
-  ended_at?: string;
+  updated_at: string;
   platform: 'opencode' | 'claude-code' | string;
   model: string;
   domain?: string;
@@ -17,7 +17,6 @@ export interface EvalSession {
   messages: ConversationMessage[];
 
   final_diff?: FileDiff[];
-  outcome: 'accepted' | 'modified' | 'rejected' | 'abandoned';
 
   signals: {
     turn_count: number;
