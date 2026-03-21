@@ -197,37 +197,49 @@ export class SessionTracker {
         msg.toolCalls = [];
       }
       const toolState = toolPart.state as any;
-      const toolCall: any = {
-        tool: toolPart.tool,
-        status: toolState?.status || 'unknown',
-        input: toolState?.input,
-        output: toolState?.output,
-      };
-      if (toolState?.status === 'error' && toolState?.error) {
-        toolCall.error = toolState.error;
-      }
-      if (toolPart.tool === 'task' && toolCall.output) {
-        const match = toolCall.output.match(/task_id:\s*(ses_[a-zA-Z0-9]+)/);
-        if (match) {
-          toolCall.sub_session_id = match[1];
+      const status = toolState?.status || 'unknown';
+      
+      const existingIdx = msg.toolCalls.findIndex((t: any) => 
+        t.tool === toolPart.tool && 
+        (t.status === 'pending' || t.status === 'running' || t.status === 'unknown') &&
+        !t.sub_session_id
+      );
+      
+      if (status === 'pending' || existingIdx < 0) {
+        const toolCall: any = {
+          tool: toolPart.tool,
+          status,
+          input: toolState?.input,
+          output: toolState?.output,
+        };
+        if (status === 'error' && toolState?.error) {
+          toolCall.error = toolState.error;
+        }
+        if (toolPart.tool === 'task' && toolCall.output) {
+          const match = toolCall.output.match(/task_id:\s*(ses_[a-zA-Z0-9]+)/);
+          if (match) {
+            toolCall.sub_session_id = match[1];
+          }
+        }
+        msg.toolCalls.push(toolCall);
+      } else {
+        const tc = msg.toolCalls[existingIdx] as any;
+        tc.status = status;
+        tc.output = toolState?.output;
+        if (status === 'error' && toolState?.error) {
+          tc.error = toolState.error;
+        }
+        if (toolPart.tool === 'task' && tc.output) {
+          const match = tc.output.match(/task_id:\s*(ses_[a-zA-Z0-9]+)/);
+          if (match) {
+            tc.sub_session_id = match[1];
+          }
         }
       }
-      msg.toolCalls.push(toolCall);
-    } else if (part.type === 'agent') {
-      const agentPart = part as AgentPart;
-      if (!msg.subAgents) {
-        msg.subAgents = [];
-      }
-      const subAgent = {
-        name: agentPart.name,
-        source: agentPart.source?.value,
-      };
-      const existingIdx = msg.subAgents.findIndex(a => a.name === agentPart.name);
-      if (existingIdx >= 0) {
-        msg.subAgents[existingIdx] = subAgent;
-      } else {
-        msg.subAgents.push(subAgent);
-      }
+    }
+    
+    if (part.type === 'agent') {
+      console.log('agent part:', JSON.stringify(part));
     }
   }
 
