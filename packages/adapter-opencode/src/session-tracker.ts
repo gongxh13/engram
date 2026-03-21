@@ -1,6 +1,6 @@
 import type { createOpencodeClient, Session, FileDiff, Message as OpenCodeMessage, AssistantMessage, TextPart, ToolPart, AgentPart } from '@opencode-ai/sdk';
 
-import { appendFileSync, existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { homedir } from 'os';
 
@@ -33,13 +33,24 @@ interface EvalSession {
 }
 
 function appendSession(session: EvalSession): void {
-  const filePath = join(homedir(), '.engram', 'sessions.jsonl');
+  const filePath = join(homedir(), '.engram', 'sessions.json');
   const dir = dirname(filePath);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
-  const line = JSON.stringify(session) + '\n';
-  appendFileSync(filePath, line, 'utf-8');
+  
+  let sessions: EvalSession[] = [];
+  if (existsSync(filePath)) {
+    try {
+      const content = readFileSync(filePath, 'utf-8');
+      sessions = JSON.parse(content);
+    } catch (e) {
+      sessions = [];
+    }
+  }
+  
+  sessions.push(session);
+  writeFileSync(filePath, JSON.stringify(sessions, null, 2), 'utf-8');
 }
 
 interface SessionMessage {
