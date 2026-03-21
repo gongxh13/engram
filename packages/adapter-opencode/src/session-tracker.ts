@@ -20,11 +20,14 @@ interface EvalSession {
     content?: string;
     model?: { providerID: string; modelID: string };
     tokens?: { input: number; output: number; reasoning: number };
-    toolCalls?: any[];
-  }>;
-  sub_sessions?: Array<{
-    id: string;
-    messages: any[];
+    toolCalls?: Array<{
+      tool: string;
+      status: string;
+      input?: any;
+      output?: any;
+      error?: string;
+      sub_session_id?: string;
+    }>;
   }>;
   final_diff?: Array<{
     path: string;
@@ -58,87 +61,7 @@ function appendSession(session: EvalSession): void {
   writeFileSync(filePath, JSON.stringify(sessions, null, 2), 'utf-8');
 }
 
-function findExistingSession(sessionID: string): EvalSession | null {
-  const filePath = join(homedir(), '.engram', 'sessions.json');
-  if (!existsSync(filePath)) {
-    return null;
-  }
-  
-  try {
-    const content = readFileSync(filePath, 'utf-8');
-    const sessions: EvalSession[] = JSON.parse(content);
-    return sessions.find(s => s.session_id === sessionID) || null;
-  } catch (e) {
-    return null;
-  }
-}
 
-function loadSubSessionMessages(subSessionID: string): { messages: any[]; turn_count: number } {
-  const messages: any[] = [];
-  const msgDir = join(homedir(), '.local/share/opencode/storage/message', subSessionID);
-  
-  if (!existsSync(msgDir)) {
-    return { messages: [], turn_count: 0 };
-  }
-
-  try {
-    const files = readdirSync(msgDir).filter(f => f.endsWith('.json'));
-    
-    for (const file of files) {
-      try {
-        const content = readFileSync(join(msgDir, file), 'utf-8');
-        const msg = JSON.parse(content);
-        
-        const msgData: any = {
-          id: msg.id,
-          role: msg.role,
-        };
-        
-        if (msg.role === 'user') {
-          msgData.content = msg.summary?.body || msg.summary?.title || '';
-        } else if (msg.role === 'assistant') {
-          msgData.model = msg.model;
-          msgData.tokens = msg.tokens;
-          
-          const partsDir = join(homedir(), '.local/share/opencode/storage/part', subSessionID, msg.id);
-          if (existsSync(partsDir)) {
-            const partFiles = readdirSync(partsDir).filter(f => f.endsWith('.json'));
-            let textContent = '';
-            const toolCalls: any[] = [];
-            
-            for (const pf of partFiles) {
-              try {
-                const pcontent = readFileSync(join(partsDir, pf), 'utf-8');
-                const part = JSON.parse(pcontent);
-                
-                if (part.type === 'text') {
-                  textContent += part.text;
-                } else if (part.type === 'tool') {
-                  toolCalls.push({
-                    tool: part.tool,
-                    status: part.state?.status || 'unknown',
-                    input: part.state?.input,
-                    output: part.state?.output,
-                  });
-                }
-              } catch (e) {}
-            }
-            
-            msgData.content = textContent;
-            if (toolCalls.length > 0) {
-              msgData.toolCalls = toolCalls;
-            }
-          }
-        }
-        
-        messages.push(msgData);
-      } catch (e) {}
-    }
-  } catch (e) {}
-
-  const turnCount = messages.filter(m => m.role === 'user').length;
-  return { messages, turn_count: turnCount };
-}
 
 interface SessionMessage {
   id: string;
@@ -274,12 +197,22 @@ export class SessionTracker {
         msg.toolCalls = [];
       }
       const existingToolIdx = msg.toolCalls.findIndex(t => t.tool === toolPart.tool);
-      const toolCall = {
+      const toolState = toolPart.state as any;
+      const toolCall: any = {
         tool: toolPart.tool,
-        status: (toolPart.state as any)?.status || 'unknown',
-        input: (toolPart.state as any)?.input,
-        output: (toolPart.state as any)?.output,
+        status: toolState?.status || 'unknown',
+        input: toolState?.input,
+        output: toolState?.output,
       };
+      if (toolState?.status === 'error' && toolState?.error) {
+        toolCall.error = toolState.error;
+      }
+      if (toolPart.tool === 'task' && toolCall.output) {
+        const match = toolCall.output.match(/task_id:\s*(ses_[a-zA-Z0-9]+)/);
+        if (match) {
+          toolCall.sub_session_id = match[1];
+        }
+      }
       if (existingToolIdx >= 0) {
         msg.toolCalls[existingToolIdx] = toolCall;
       } else {
@@ -327,41 +260,6 @@ export class SessionTracker {
       initialPrompt = initialPrompt.replace(/^["']|["']/g, '').trim();
     }
 
-    const subSessions: Array<{ id: string; messages: any[]; turn_count: number }> = [];
-    const addedSubSessionIDs = new Set<string>();
-    
-    for (const msg of state.messages) {
-      if (msg.toolCalls) {
-        for (const tc of msg.toolCalls) {
-          if (tc.tool === 'task' && tc.output) {
-            const match = tc.output.match(/task_id:\s*(ses_[a-zA-Z0-9]+)/);
-            if (match && !addedSubSessionIDs.has(match[1])) {
-              const subSessionID = match[1];
-              const { messages: subMessages, turn_count } = loadSubSessionMessages(subSessionID);
-              if (subMessages.length > 0) {
-                subSessions.push({
-                  id: subSessionID,
-                  messages: subMessages,
-                  turn_count,
-                });
-                addedSubSessionIDs.add(subSessionID);
-              } else {
-                const existingSession = findExistingSession(subSessionID);
-                if (existingSession) {
-                  subSessions.push({
-                    id: subSessionID,
-                    messages: existingSession.messages,
-                    turn_count: existingSession.signals?.turn_count || 0,
-                  });
-                  addedSubSessionIDs.add(subSessionID);
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-
     const evalSession: EvalSession = {
       session_id: sessionID,
       created_at: state.startedAt,
@@ -374,7 +272,6 @@ export class SessionTracker {
         cwd: state.session.directory,
       },
       messages: state.messages,
-      sub_sessions: subSessions.length > 0 ? subSessions : undefined,
       final_diff: state.finalDiff?.map((diff) => ({
         path: diff.file,
         originalContent: diff.before,
